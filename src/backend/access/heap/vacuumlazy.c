@@ -92,6 +92,12 @@
 	((BlockNumber) (((uint64) 8 * 1024 * 1024 * 1024) / BLCKSZ))
 
 /*
+ * When a table has no indexes, report the progress to stats collecter
+ * every 8MB, approximately.
+ */
+#define VACUUM_RESTART_INTERVAL 1024 /* 8MB */
+
+/*
  * Guesstimation of number of dead tuples per page.  This is used to
  * provide an upper limit to memory allocated when vacuuming small
  * tables.
@@ -152,7 +158,7 @@ static BufferAccessStrategy vac_strategy;
 /* non-export function prototypes */
 static void lazy_scan_heap(Relation onerel, VacuumParams *params,
 						   LVRelStats *vacrelstats, Relation *Irel, int nindexes,
-						   bool aggressive);
+						   BlockNumber begin, bool aggressive);
 static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
 static bool lazy_check_needs_freeze(Buffer buf, bool *hastup);
 static void lazy_vacuum_index(Relation indrel,
@@ -205,6 +211,7 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 	MultiXactId mxactFullScanLimit;
 	BlockNumber new_rel_pages;
 	BlockNumber new_rel_allvisible;
+	BlockNumber begin_blk = 0;	/* start from the first block by default */
 	double		new_live_tuples;
 	TransactionId new_frozen_xid;
 	MultiXactId new_min_multi;
@@ -229,9 +236,6 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 	else
 		elevel = DEBUG2;
 
-	pgstat_progress_start_command(PROGRESS_COMMAND_VACUUM,
-								  RelationGetRelid(onerel));
-
 	vac_strategy = bstrategy;
 
 	vacuum_set_xid_limits(onerel,
@@ -254,6 +258,27 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 											  mxactFullScanLimit);
 	if (params->options & VACOPT_DISABLE_PAGE_SKIPPING)
 		aggressive = true;
+
+	if (params->options & VACOPT_RESUME && !aggressive)
+	{
+		Oid		oid = RelationGetRelid(onerel);
+		bool	found;
+		PgStat_StatDBEntry *dbentry;
+		PgStat_StatTabEntry	*tabentry;
+
+		dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
+		tabentry = hash_search(dbentry->tables, (void *) &oid,
+							   HASH_FIND, &found);
+
+		if (found &&
+			tabentry->vacuum_resume_block < RelationGetNumberOfBlocks(onerel))
+			begin_blk = tabentry->vacuum_resume_block;
+	}
+
+	elog(NOTICE, "starting from %u block", begin_blk);
+
+	pgstat_progress_start_command(PROGRESS_COMMAND_VACUUM,
+								  RelationGetRelid(onerel));
 
 	/*
 	 * Normally the relfrozenxid for an anti-wraparound vacuum will be old
@@ -286,7 +311,8 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 							 params->index_cleanup == VACOPT_TERNARY_ENABLED);
 
 	/* Do the vacuuming */
-	lazy_scan_heap(onerel, params, vacrelstats, Irel, nindexes, aggressive);
+	lazy_scan_heap(onerel, params, vacrelstats, Irel, nindexes, begin_blk,
+				   aggressive);
 
 	/* Done with indexes */
 	vac_close_indexes(nindexes, Irel, NoLock);
@@ -298,7 +324,8 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 	 * NB: We need to check this before truncating the relation, because that
 	 * will change ->rel_pages.
 	 */
-	if ((vacrelstats->scanned_pages + vacrelstats->frozenskipped_pages)
+	if (begin_blk != 0 ||
+		(vacrelstats->scanned_pages + vacrelstats->frozenskipped_pages)
 		< vacrelstats->rel_pages)
 	{
 		Assert(!aggressive);
@@ -494,7 +521,7 @@ vacuum_log_cleanup_info(Relation rel, LVRelStats *vacrelstats)
  */
 static void
 lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
-			   Relation *Irel, int nindexes, bool aggressive)
+			   Relation *Irel, int nindexes, BlockNumber begin, bool aggressive)
 {
 	BlockNumber nblocks,
 				blkno;
@@ -504,7 +531,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	TransactionId relminmxid = onerel->rd_rel->relminmxid;
 	BlockNumber empty_pages,
 				vacuumed_pages,
-				next_fsm_block_to_vacuum;
+				next_fsm_block_to_vacuum,
+				next_resume_block;
 	double		num_tuples,		/* total number of nonremovable tuples */
 				live_tuples,	/* live tuples (reltuples estimate) */
 				tups_vacuumed,	/* tuples cleaned up by vacuum */
@@ -541,12 +569,15 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 
 	empty_pages = vacuumed_pages = 0;
 	next_fsm_block_to_vacuum = (BlockNumber) 0;
+	next_resume_block = (BlockNumber) 0;
 	num_tuples = live_tuples = tups_vacuumed = nkeep = nunused = 0;
 
 	indstats = (IndexBulkDeleteResult **)
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
 
 	nblocks = RelationGetNumberOfBlocks(onerel);
+	Assert(begin <= nblocks);
+
 	vacrelstats->rel_pages = nblocks;
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->tupcount_pages = 0;
@@ -606,7 +637,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	 * the last page.  This is worth avoiding mainly because such a lock must
 	 * be replayed on any hot standby, where it can be disruptive.
 	 */
-	next_unskippable_block = 0;
+	next_unskippable_block = begin;
 	if ((params->options & VACOPT_DISABLE_PAGE_SKIPPING) == 0)
 	{
 		while (next_unskippable_block < nblocks)
@@ -635,7 +666,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	else
 		skipping_blocks = false;
 
-	for (blkno = 0; blkno < nblocks; blkno++)
+	for (blkno = begin; blkno < nblocks; blkno++)
 	{
 		Buffer		buf;
 		Page		page;
@@ -798,6 +829,13 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			 */
 			FreeSpaceMapVacuumRange(onerel, next_fsm_block_to_vacuum, blkno);
 			next_fsm_block_to_vacuum = blkno;
+
+			/*
+			 * Resume point
+			 */
+			pgstat_report_vacuum_restartpoint(RelationGetRelid(onerel),
+											  onerel->rd_rel->relisshared,
+											  blkno);
 
 			/* Report that we are once again scanning the heap */
 			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
@@ -1270,6 +1308,17 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			 * valid.
 			 */
 			vacrelstats->num_dead_tuples = 0;
+
+			/*
+			 * Resume point
+			 */
+			if (blkno - next_resume_block >= VACUUM_RESTART_INTERVAL)
+			{
+				pgstat_report_vacuum_restartpoint(RelationGetRelid(onerel),
+												  onerel->rd_rel->relisshared,
+												  blkno);
+				next_resume_block = blkno;
+			}
 
 			/*
 			 * Periodically do incremental FSM vacuuming to make newly-freed

@@ -328,6 +328,8 @@ static void pgstat_recv_resetsharedcounter(PgStat_MsgResetsharedcounter *msg, in
 static void pgstat_recv_resetsinglecounter(PgStat_MsgResetsinglecounter *msg, int len);
 static void pgstat_recv_autovac(PgStat_MsgAutovacStart *msg, int len);
 static void pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len);
+static void pgstat_recv_vacuum_restartpoint(PgStat_MsgVacuumRestartPoint *msg,
+											int len);
 static void pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len);
 static void pgstat_recv_archiver(PgStat_MsgArchiver *msg, int len);
 static void pgstat_recv_bgwriter(PgStat_MsgBgWriter *msg, int len);
@@ -1422,6 +1424,21 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 	msg.m_vacuumtime = GetCurrentTimestamp();
 	msg.m_live_tuples = livetuples;
 	msg.m_dead_tuples = deadtuples;
+	pgstat_send(&msg, sizeof(msg));
+}
+
+void
+pgstat_report_vacuum_restartpoint(Oid tableoid, bool shared, BlockNumber blkno)
+{
+	PgStat_MsgVacuumRestartPoint msg;
+
+	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_VACUUMRESTARTPOINT);
+	msg.m_databaseid = shared ? InvalidOid : MyDatabaseId;
+	msg.m_tableoid = tableoid;
+	msg.m_blkno = blkno;
 	pgstat_send(&msg, sizeof(msg));
 }
 
@@ -4594,6 +4611,10 @@ PgstatCollectorMain(int argc, char *argv[])
 					pgstat_recv_vacuum(&msg.msg_vacuum, len);
 					break;
 
+				case PGSTAT_MTYPE_VACUUMRESTARTPOINT:
+					pgstat_recv_vacuum_restartpoint(&msg.msg_vacuum_restartpoint, len);
+					break;
+
 				case PGSTAT_MTYPE_ANALYZE:
 					pgstat_recv_analyze(&msg.msg_analyze, len);
 					break;
@@ -6228,6 +6249,20 @@ pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len)
 		tabentry->vacuum_timestamp = msg->m_vacuumtime;
 		tabentry->vacuum_count++;
 	}
+}
+
+static void
+pgstat_recv_vacuum_restartpoint(PgStat_MsgVacuumRestartPoint *msg, int len)
+{
+	PgStat_StatDBEntry *dbentry;
+	PgStat_StatTabEntry *tabentry;
+
+	/*
+	 * Store the data in the table's hashtable entry.
+	 */
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, true);
+	tabentry = pgstat_get_tab_entry(dbentry, msg->m_tableoid, true);
+	tabentry->vacuum_resume_block = msg->m_blkno;
 }
 
 /* ----------

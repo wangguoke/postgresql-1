@@ -57,6 +57,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_RESETSINGLECOUNTER,
 	PGSTAT_MTYPE_AUTOVAC_START,
 	PGSTAT_MTYPE_VACUUM,
+	PGSTAT_MTYPE_VACUUMRESTARTPOINT,
 	PGSTAT_MTYPE_ANALYZE,
 	PGSTAT_MTYPE_ARCHIVER,
 	PGSTAT_MTYPE_BGWRITER,
@@ -372,6 +373,14 @@ typedef struct PgStat_MsgVacuum
 	PgStat_Counter m_dead_tuples;
 } PgStat_MsgVacuum;
 
+typedef struct PgStat_MsgVacuumRestartPoint
+{
+	PgStat_MsgHdr m_hdr;
+	Oid			m_databaseid;
+	Oid			m_tableoid;
+	BlockNumber	m_blkno;
+} PgStat_MsgVacuumRestartPoint;
+
 
 /* ----------
  * PgStat_MsgAnalyze			Sent by the backend or autovacuum daemon
@@ -562,6 +571,7 @@ typedef union PgStat_Msg
 	PgStat_MsgResetsinglecounter msg_resetsinglecounter;
 	PgStat_MsgAutovacStart msg_autovacuum_start;
 	PgStat_MsgVacuum msg_vacuum;
+	PgStat_MsgVacuumRestartPoint msg_vacuum_restartpoint;
 	PgStat_MsgAnalyze msg_analyze;
 	PgStat_MsgArchiver msg_archiver;
 	PgStat_MsgBgWriter msg_bgwriter;
@@ -572,7 +582,6 @@ typedef union PgStat_Msg
 	PgStat_MsgTempFile msg_tempfile;
 	PgStat_MsgChecksumFailure msg_checksumfailure;
 } PgStat_Msg;
-
 
 /* ------------------------------------------------------------
  * Statistic collector data structures follow
@@ -650,6 +659,8 @@ typedef struct PgStat_StatTabEntry
 
 	PgStat_Counter blocks_fetched;
 	PgStat_Counter blocks_hit;
+
+	BlockNumber	vacuum_resume_block;
 
 	TimestampTz vacuum_timestamp;	/* user initiated vacuum */
 	PgStat_Counter vacuum_count;
@@ -1263,6 +1274,8 @@ extern void pgstat_reset_single_counter(Oid objectid, PgStat_Single_Reset_Type t
 extern void pgstat_report_autovac(Oid dboid);
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
 								 PgStat_Counter livetuples, PgStat_Counter deadtuples);
+extern void pgstat_report_vacuum_restartpoint(Oid tableoid, bool shared,
+											  BlockNumber blkno);
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);
