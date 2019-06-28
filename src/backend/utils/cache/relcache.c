@@ -6108,3 +6108,12 @@ unlink_initfile(const char *initfilename, int elevel)
 							initfilename)));
 	}
 }
+
+bool
+realtion_is_encrypted(Oid relfilenode)
+{
+	if (!IsUnderPostmaster || IsBootstrapProcessingMode() || (!OidIsValid(MyDatabaseId)))
+                return false;
+
+	return	RelEncMapExists(relfilenode);
+}

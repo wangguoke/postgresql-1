@@ -278,7 +278,7 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 	state->rs_freeze_xid = freeze_xid;
 	state->rs_cutoff_multi = cutoff_multi;
 	state->rs_cxt = rw_cxt;
-	state->rs_encryption = tablespace_is_encrypted(new_heap->rd_node.spcNode);
+	state->rs_encryption = tablespace_is_encrypted(new_heap->rd_node.spcNode) || realtion_is_encrypted(new_heap->rd_node.relNode);
 
 	/* Initialize hash tables used to track update chains */
 	memset(&hash_ctl, 0, sizeof(hash_ctl));

@@ -86,6 +86,7 @@
 #include "storage/lock.h"
 #include "storage/predicate.h"
 #include "storage/smgr.h"
+#include "storage/kmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -574,6 +575,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+	StdRdOptions    *rdopts;
+	bool		isencrypted = false;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -721,6 +724,24 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 	if (relkind == RELKIND_VIEW)
 		(void) view_reloptions(reloptions, true);
+	else if (relkind == RELKIND_RELATION)
+	{
+		rdopts = (StdRdOptions *) heap_reloptions(relkind, reloptions, true);
+
+		if (rdopts && rdopts->encryption)
+		{
+			if (!TransparentEncryptionEnabled())
+					ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("tablespace encryption requires a kmgr library"),
+							errhint("Please set kmgr_plugin_library parameter")));
+
+			if (!KeyringKeyExists(tablespaceId))
+				KeyringCreateKey(tablespaceId);
+
+			isencrypted = true;
+		}
+	}
 	else
 		(void) heap_reloptions(relkind, reloptions, true);
 
@@ -868,6 +889,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 										  false,
 										  InvalidOid,
 										  typaddress);
+
+	if (isencrypted)
+		RelEncMapAdd(relationId);
 
 	/*
 	 * We must bump the command counter to make the newly-created relation

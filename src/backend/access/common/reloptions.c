@@ -162,7 +162,7 @@ static relopt_bool boolRelOpts[] =
 		{
 			"encryption",
 			"Enables transparent encryption",
-			RELOPT_KIND_TABLESPACE,
+			RELOPT_KIND_HEAP | RELOPT_KIND_TABLESPACE,
 			ShareUpdateExclusiveLock
 		},
 		false
@@ -1421,7 +1421,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_index_cleanup", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, vacuum_truncate)}
+		offsetof(StdRdOptions, vacuum_truncate)},
+		{"encryption", RELOPT_TYPE_BOOL,
+                offsetof(StdRdOptions, encryption)}
 	};
 
 	options = parseRelOptions(reloptions, validate, kind, &numoptions);

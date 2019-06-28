@@ -880,6 +880,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		MemSet((char *) bufBlock, 0, BLCKSZ);
 
 		/* If the tablespace is encrypted, encrypt buffer and mark */
+		if (realtion_is_encrypted(smgr->smgr_rnode.node.relNode))
 		if (tablespace_is_encrypted(smgr->smgr_rnode.node.spcNode))
 			encrypt = true;
 
@@ -949,6 +950,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			/*
 			 * @@@: Decrypt then checksum, or should checksum then decrypt?
 			 */
+			if (realtion_is_encrypted(smgr->smgr_rnode.node.relNode))
 			if (tablespace_is_encrypted(smgr->smgr_rnode.node.spcNode))
 			{
 				uint32	buf_state;

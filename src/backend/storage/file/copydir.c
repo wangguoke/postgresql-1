@@ -188,8 +188,10 @@ copy_file(char *fromfile, char *tofile)
 	ParseRelationPath(tofile, &(toNode.dbNode),
 					  &(toNode.spcNode), &(toNode.relNode),
 					  &forknum, &segment);
-	need_encryption &= (tablespace_is_encrypted(fromNode.spcNode) ||
-						tablespace_is_encrypted(toNode.spcNode));
+        need_encryption &= (realtion_is_encrypted(fromNode.relNode) ||
+                                                realtion_is_encrypted(toNode.relNode));
+//	need_encryption &= (tablespace_is_encrypted(fromNode.spcNode) ||
+//						tablespace_is_encrypted(toNode.spcNode));
 
 #ifdef DEBUG_TDE
 	fprintf(stderr, "copydir::copy file \"%s\"d = %u, s = %u, r = %u, enc = %d\n",
@@ -278,8 +280,10 @@ reencrypt_copy_buffer(char *buffer, int nbytes, RelFileNode srcNode,
 	char		srcTweak[ENCRYPTION_TWEAK_SIZE] = {0};
 	char		dstTweak[ENCRYPTION_TWEAK_SIZE] = {0};
 	char		*cur;
-	bool		srcisencrypted = tablespace_is_encrypted(srcNode.spcNode);
-	bool		dstisencrypted = tablespace_is_encrypted(dstNode.spcNode);
+//	bool		srcisencrypted = tablespace_is_encrypted(srcNode.spcNode);
+//	bool		dstisencrypted = tablespace_is_encrypted(dstNode.spcNode);
+	bool            srcisencrypted = realtion_is_encrypted(srcNode.relNode);
+	bool            dstisencrypted = realtion_is_encrypted(dstNode.relNode);
 
 	Assert(nbytes % BLCKSZ == 0);
 

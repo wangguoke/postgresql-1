@@ -1323,6 +1323,7 @@ PostmasterMain(int argc, char *argv[])
 	 * shared memory.
 	 */
 	InitializeKmgr();
+	InitializeREM();
 
 	/*
 	 * Load configuration files for client authentication.
